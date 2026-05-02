@@ -614,7 +614,11 @@ component SettingsPage inherits Rectangle {
     in-out property <string> city;
     in-out property <bool> use_celsius;
     in-out property <string> topic;
+    in-out property <string> hadoop_status;
     callback save_requested();
+    callback export_hadoop_requested();
+    callback upload_hadoop_requested();
+    callback list_hadoop_requested();
 
     background: #0f172a;
     border-radius: 10px;
@@ -790,6 +794,92 @@ component SettingsPage inherits Rectangle {
                         }
                     }
                 }
+
+                                Rectangle {
+                                    height: 1px;
+                                    width: parent.width;
+                                    background: #334155;
+                                }
+
+                                Text {
+                                    text: "Hadoop";
+                                    color: white;
+                                    font-size: Palette.default_text_size + 6px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        width: 120px;
+                                        height: 32px;
+                                        border-radius: 8px;
+                                        background: #2563eb;
+
+                                        Text {
+                                            text: "Export Data";
+                                            color: white;
+                                            font-size: Palette.default_text_size;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        TouchArea {
+                                            clicked => {
+                                                root.export_hadoop_requested();
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 140px;
+                                        height: 32px;
+                                        border-radius: 8px;
+                                        background: #16a34a;
+
+                                        Text {
+                                            text: "Upload to HDFS";
+                                            color: white;
+                                            font-size: Palette.default_text_size;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        TouchArea {
+                                            clicked => {
+                                                root.upload_hadoop_requested();
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 130px;
+                                        height: 32px;
+                                        border-radius: 8px;
+                                        background: #7c3aed;
+
+                                        Text {
+                                            text: "List HDFS Files";
+                                            color: white;
+                                            font-size: Palette.default_text_size;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+
+                                        TouchArea {
+                                            clicked => {
+                                                root.list_hadoop_requested();
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: root.hadoop_status;
+                                    color: #cbd5e1;
+                                    font-size: Palette.default_text_size - 1px;
+                                    wrap: word-wrap;
+                                }
             }
         }
 
@@ -824,6 +914,10 @@ export component MainWindow inherits Window {
     in-out property <string> news_status: "";
     in-out property <bool> use_celsius: true;
     callback save_settings();
+    in-out property <string> hadoop_status: "";
+    callback export_hadoop_data();
+    callback upload_hadoop_data();
+    callback list_hadoop_files();
     in-out property <string> current_user: "guest";
     in-out property <[string]> users;
     callback logout();
@@ -916,8 +1010,22 @@ export component MainWindow inherits Window {
                     city <=> root.weather_city;
                     use_celsius <=> root.use_celsius;
                     topic <=> root.news_topic;
+                    hadoop_status <=> root.hadoop_status;
+
                     save_requested() => {
                         root.save_settings();
+                    }
+
+                    export_hadoop_requested() => {
+                        root.export_hadoop_data();
+                    }
+
+                    upload_hadoop_requested() => {
+                        root.upload_hadoop_data();
+                    }
+
+                    list_hadoop_requested() => {
+                        root.list_hadoop_files();
                     }
                 }
             }

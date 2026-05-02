@@ -1,23 +1,22 @@
 mod auth;
-mod weather;
-mod news;
-mod config;
 mod cache;
+mod config;
 mod geocode;
+mod hadoop;
+mod news;
+mod weather;
 
-use weather::fetch_next_hours_at;
 use geocode::fetch_coords;
+use weather::fetch_next_hours_at;
 
-
+use auth::{AuthError, LocalAuth};
 use std::sync::{Arc, Mutex};
-use auth::{LocalAuth, AuthError};
 
 use config::{AppConfig, load_config, load_config_for, save_config_for};
+use hadoop::{export_all_user_data, list_hdfs_user_files, upload_exports_to_hdfs};
 
 use cache::{
-    is_fresh, age_minutes,
-    load_weather_for, save_weather_for,
-    load_news_for, save_news_for,
+    age_minutes, is_fresh, load_news_for, load_weather_for, save_news_for, save_weather_for,
 };
 
 use slint::{ComponentHandle, Image, SharedPixelBuffer};
@@ -46,24 +45,33 @@ fn ui<F: FnOnce(MainWindow) + Send + 'static>(app_weak: &slint::Weak<MainWindow>
 
 // Centralized setters
 fn set_page(state: &State, app_weak: &slint::Weak<MainWindow>, page: Page) {
-    if let Ok(mut s) = state.lock() { s.current_page = page; }
+    if let Ok(mut s) = state.lock() {
+        s.current_page = page;
+    }
     ui(app_weak, move |app| app.set_current_page(page));
 }
 
 fn set_login(state: &State, app_weak: &slint::Weak<MainWindow>, logged_in: bool) {
-    if let Ok(mut s) = state.lock() { s.is_logged_in = logged_in; }
+    if let Ok(mut s) = state.lock() {
+        s.is_logged_in = logged_in;
+    }
     ui(app_weak, move |app| {
         app.set_is_logged_in(logged_in);
         if logged_in {
             // clear any prior login error (LoginView is overlay_login_box)
             app.set_login_error_text("".into());
-
         }
     });
 }
 
+fn set_hadoop_status(app_weak: &slint::Weak<MainWindow>, msg: String) {
+    ui(app_weak, move |app| app.set_hadoop_status(msg.into()));
+}
+
 fn set_clock(state: &State, app_weak: &slint::Weak<MainWindow>, text: String) {
-    if let Ok(mut s) = state.lock() { s.clock_text = text.clone(); }
+    if let Ok(mut s) = state.lock() {
+        s.clock_text = text.clone();
+    }
     ui(app_weak, move |app| app.set_clock_text(text.into()));
 }
 
@@ -80,7 +88,9 @@ fn current_user(state: &State) -> String {
 }
 
 fn set_current_user(state: &State, app_weak: &slint::Weak<MainWindow>, user: Option<String>) {
-    if let Ok(mut s) = state.lock() { s.current_user = user.clone(); }
+    if let Ok(mut s) = state.lock() {
+        s.current_user = user.clone();
+    }
     let label = user.clone().unwrap_or_else(|| "guest".into());
     ui(app_weak, move |app| app.set_current_user(label.into()));
 }
@@ -163,7 +173,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let h = handle.clone();
         let state_for_clock = state.clone();
         h.spawn(async move {
-            use tokio::time::{interval, Duration};
+            use tokio::time::{Duration, interval};
             let mut tick = interval(Duration::from_secs(1));
             loop {
                 tick.tick().await;
@@ -180,7 +190,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let app_weak = app.as_weak();
         let h = handle.clone();
         h.spawn(async move {
-            use tokio::time::{sleep, Duration};
+            use tokio::time::{Duration, sleep};
             sleep(Duration::from_millis(1200)).await;
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = app_weak.upgrade() {
@@ -198,7 +208,6 @@ fn main() -> Result<(), slint::PlatformError> {
     app.invoke_refresh_weather();
     app.invoke_refresh_news();
 
-
     // Local auth (register & login)
     let auth = LocalAuth::new().expect("auth storage");
     push_users_to_ui(&app.as_weak(), &auth);
@@ -206,7 +215,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // REGISTER
     {
         let app_weak = app.as_weak();
-        let auth_reg = LocalAuth { path: auth.path.clone() };
+        let auth_reg = LocalAuth {
+            path: auth.path.clone(),
+        };
         let h_register = handle.clone();
         let state_for_reg = state.clone();
 
@@ -218,7 +229,9 @@ fn main() -> Result<(), slint::PlatformError> {
             let aw = app_weak.clone();
             let st = state_for_reg.clone();
             let auth_path = auth_reg.path.clone();
-            let auth = LocalAuth { path: auth_path.clone() };
+            let auth = LocalAuth {
+                path: auth_path.clone(),
+            };
             let h = h_register.clone();
 
             // clear any previous error immediately
@@ -226,7 +239,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
             h.spawn(async move {
                 // CPU-bound hashing off the reactor
-                let res = tokio::task::spawn_blocking(move || auth.register_user(&user_for_auth, &pin_for_auth)).await;
+                let res = tokio::task::spawn_blocking(move || {
+                    auth.register_user(&user_for_auth, &pin_for_auth)
+                })
+                .await;
                 match res {
                     Ok(Ok(())) => {
                         // 1) remember who is logged in (Rust state)
@@ -238,7 +254,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         set_current_user(&st, &aw, Some(user.clone()));
 
                         // 3) refresh the users list (so the new account appears)
-                        let auth2 = LocalAuth { path: auth_path.clone() };
+                        let auth2 = LocalAuth {
+                            path: auth_path.clone(),
+                        };
                         push_users_to_ui(&aw, &auth2);
 
                         // 4) load that user's config + push to UI
@@ -255,9 +273,13 @@ fn main() -> Result<(), slint::PlatformError> {
                         });
                     }
 
-                    Ok(Err(AuthError::AlreadyExists)) => set_login_error(&aw, "User already exists".to_string()),
+                    Ok(Err(AuthError::AlreadyExists)) => {
+                        set_login_error(&aw, "User already exists".to_string())
+                    }
                     Ok(Err(e)) => set_login_error(&aw, format!("Register error: {:?}", e)),
-                    Err(join_err) => set_login_error(&aw, format!("Register task failed: {:?}", join_err)),
+                    Err(join_err) => {
+                        set_login_error(&aw, format!("Register task failed: {:?}", join_err))
+                    }
                 }
             });
         });
@@ -266,7 +288,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // LOGIN
     {
         let app_weak = app.as_weak();
-        let auth_log = LocalAuth { path: auth.path.clone() };
+        let auth_log = LocalAuth {
+            path: auth.path.clone(),
+        };
         let h_login = handle.clone();
         let state_for_login = state.clone();
 
@@ -278,14 +302,19 @@ fn main() -> Result<(), slint::PlatformError> {
             let aw = app_weak.clone();
             let st = state_for_login.clone();
             let auth_path = auth_log.path.clone();
-            let auth = LocalAuth { path: auth_path.clone() };
+            let auth = LocalAuth {
+                path: auth_path.clone(),
+            };
             let h = h_login.clone();
 
             // clear any previous error immediately
             set_login_error(&aw, "".to_string());
 
             h.spawn(async move {
-                let res = tokio::task::spawn_blocking(move || auth.verify_login(&user_for_auth, &pin_for_auth)).await;
+                let res = tokio::task::spawn_blocking(move || {
+                    auth.verify_login(&user_for_auth, &pin_for_auth)
+                })
+                .await;
                 match res {
                     Ok(Ok(())) => {
                         if let Ok(mut s) = st.lock() {
@@ -293,7 +322,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                         set_current_user(&st, &aw, Some(user.clone()));
 
-                        let auth2 = LocalAuth { path: auth_path.clone() };
+                        let auth2 = LocalAuth {
+                            path: auth_path.clone(),
+                        };
                         push_users_to_ui(&aw, &auth2);
 
                         let user_for_ui = user.clone();
@@ -309,10 +340,16 @@ fn main() -> Result<(), slint::PlatformError> {
                         });
                     }
 
-                    Ok(Err(AuthError::NotFound)) => set_login_error(&aw, "Unknown user".to_string()),
-                    Ok(Err(AuthError::InvalidPin)) => set_login_error(&aw, "Invalid PIN".to_string()),
+                    Ok(Err(AuthError::NotFound)) => {
+                        set_login_error(&aw, "Unknown user".to_string())
+                    }
+                    Ok(Err(AuthError::InvalidPin)) => {
+                        set_login_error(&aw, "Invalid PIN".to_string())
+                    }
                     Ok(Err(e)) => set_login_error(&aw, format!("Login error: {:?}", e)),
-                    Err(join_err) => set_login_error(&aw, format!("Login task failed: {:?}", join_err)),
+                    Err(join_err) => {
+                        set_login_error(&aw, format!("Login task failed: {:?}", join_err))
+                    }
                 }
             });
         });
@@ -330,7 +367,9 @@ fn main() -> Result<(), slint::PlatformError> {
             set_current_user(&state_for_logout, &app_weak, None);
 
             // refresh users list in the menu
-            let auth2 = LocalAuth { path: auth_path.clone() };
+            let auth2 = LocalAuth {
+                path: auth_path.clone(),
+            };
             push_users_to_ui(&app_weak, &auth2);
 
             // clear lists on screen
@@ -338,11 +377,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 app.set_login_user("".into());
                 app.set_login_pin("".into());
                 app.set_login_error_text("".into());
-                app.set_weather_items(slint::ModelRc::new(slint::VecModel::from(Vec::<WeatherItem>::new())));
-                app.set_news_items(slint::ModelRc::new(slint::VecModel::from(Vec::<ArticleItem>::new())));
+                app.set_weather_items(slint::ModelRc::new(slint::VecModel::from(
+                    Vec::<WeatherItem>::new(),
+                )));
+                app.set_news_items(slint::ModelRc::new(slint::VecModel::from(
+                    Vec::<ArticleItem>::new(),
+                )));
                 app.set_current_page(Page::Weather);
             });
-
         });
     }
 
@@ -360,7 +402,9 @@ fn main() -> Result<(), slint::PlatformError> {
             set_login(&state_for_switch, &app_weak, true);
 
             // refresh users list (so menu shows up-to-date entries)
-            let auth2 = LocalAuth { path: auth_path.clone() };
+            let auth2 = LocalAuth {
+                path: auth_path.clone(),
+            };
             push_users_to_ui(&app_weak, &auth2);
 
             // load that user's config and trigger refreshes
@@ -386,7 +430,9 @@ fn main() -> Result<(), slint::PlatformError> {
             let user = u.to_string();
 
             // delete from users.json (auth), config dir and cache dir
-            let auth2 = LocalAuth { path: auth_path.clone() };
+            let auth2 = LocalAuth {
+                path: auth_path.clone(),
+            };
             let _ = auth2.delete_user(&user);
             let _ = config::delete_user_tree(&user);
 
@@ -398,8 +444,14 @@ fn main() -> Result<(), slint::PlatformError> {
                 ui(&app_weak, move |app| {
                     app.set_login_user("".into());
                     app.set_login_pin("".into());
-                    app.set_weather_items(slint::ModelRc::new(slint::VecModel::from(Vec::<WeatherItem>::new())));
-                    app.set_news_items(slint::ModelRc::new(slint::VecModel::from(Vec::<ArticleItem>::new())));
+                    app.set_weather_items(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                        WeatherItem,
+                    >::new(
+                    ))));
+                    app.set_news_items(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                        ArticleItem,
+                    >::new(
+                    ))));
                     app.set_current_page(Page::Weather);
                 });
             }
@@ -431,22 +483,26 @@ fn main() -> Result<(), slint::PlatformError> {
                 let want = if use_celsius { "C" } else { "F" };
                 if is_fresh(c.ts, 15 * 60) && c.units == want && c.city == city.to_lowercase() {
                     if let Some(app) = app_weak.upgrade() {
-                        let items: Vec<WeatherItem> = c.rows
+                        let items: Vec<WeatherItem> = c
+                            .rows
                             .into_iter()
                             .map(|r| WeatherItem {
                                 time: r.time.into(),
                                 temp: r.temp.into(),
                                 summary: r.summary.into(),
-                                icon: slint::Image::default(),   // cache has no icon info
+                                icon: slint::Image::default(), // cache has no icon info
                             })
                             .collect();
                         let model = slint::VecModel::from(items);
                         app.set_weather_items(slint::ModelRc::new(model));
-                        app.set_weather_status(format!(
-                            "Cached ({}) • updated {}m ago",
-                            if use_celsius { "°C" } else { "°F" },
-                            age_minutes(c.ts)
-                        ).into());
+                        app.set_weather_status(
+                            format!(
+                                "Cached ({}) • updated {}m ago",
+                                if use_celsius { "°C" } else { "°F" },
+                                age_minutes(c.ts)
+                            )
+                            .into(),
+                        );
                     }
                 }
             }
@@ -469,7 +525,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                     Err(_) => {
                         ui(&aw, move |app| {
-                            app.set_weather_status(format!("City not found: {}", city_for_err).into());
+                            app.set_weather_status(
+                                format!("City not found: {}", city_for_err).into(),
+                            );
                         });
                         return;
                     }
@@ -479,9 +537,11 @@ fn main() -> Result<(), slint::PlatformError> {
                     // Build cache (text-only) and UI (with icons loaded on the UI thread)
                     Ok(rows) => {
                         // Save simplified rows to cache (compatible with old format)
-                        let rows_for_cache: Vec<(String, String, String)> = rows.iter()
+                        let rows_for_cache: Vec<(String, String, String)> = rows
+                            .iter()
                             .map(|r| {
-                                let summary = format!("{} • {} • {}", r.description, r.real_feel, r.precip);
+                                let summary =
+                                    format!("{} • {} • {}", r.description, r.real_feel, r.precip);
                                 (r.time.clone(), r.temp.clone(), summary)
                             })
                             .collect();
@@ -503,8 +563,9 @@ fn main() -> Result<(), slint::PlatformError> {
 
                         let mut gui_rows: Vec<GuiRow> = Vec::with_capacity(rows.len());
                         for r in rows {
-                            let icon_path = cache_icon_to_path(&r.icon_url).await;  // async download/cache
-                            let summary = format!("{} • {} • {}", r.description, r.real_feel, r.precip);
+                            let icon_path = cache_icon_to_path(&r.icon_url).await; // async download/cache
+                            let summary =
+                                format!("{} • {} • {}", r.description, r.real_feel, r.precip);
                             gui_rows.push(GuiRow {
                                 time: r.time,
                                 temp: r.temp,
@@ -518,9 +579,12 @@ fn main() -> Result<(), slint::PlatformError> {
                             let items: Vec<WeatherItem> = gui_rows
                                 .into_iter()
                                 .map(|g| {
-                                    let img = g.icon_path
+                                    let img = g
+                                        .icon_path
                                         .as_ref()
-                                        .and_then(|p| slint::Image::load_from_path(p.as_path()).ok())
+                                        .and_then(|p| {
+                                            slint::Image::load_from_path(p.as_path()).ok()
+                                        })
                                         .unwrap_or_default();
 
                                     WeatherItem {
@@ -535,11 +599,11 @@ fn main() -> Result<(), slint::PlatformError> {
                             let model = slint::VecModel::from(items);
                             app.set_weather_items(slint::ModelRc::new(model));
                             app.set_weather_status(
-                                format!("Updated ({})", if use_celsius { "°C" } else { "°F" }).into()
+                                format!("Updated ({})", if use_celsius { "°C" } else { "°F" })
+                                    .into(),
                             );
                         });
                     }
-
 
                     // Error handling
                     Err(err) => {
@@ -556,7 +620,6 @@ fn main() -> Result<(), slint::PlatformError> {
             });
         });
     }
-
 
     // NEWS
     {
@@ -578,8 +641,10 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(c) = load_news_for(&user) {
                 if is_fresh(c.ts, 15 * 60) {
                     if let Some(app) = app_weak.upgrade() {
-                      //  let path = Path::new("assets/no_image.png");
-                        let items: Vec<ArticleItem> = c.rows.into_iter()
+                        //  let path = Path::new("assets/no_image.png");
+                        let items: Vec<ArticleItem> = c
+                            .rows
+                            .into_iter()
                             .map(|r| ArticleItem {
                                 title: r.title.into(),
                                 source: r.source.into(),
@@ -590,7 +655,9 @@ fn main() -> Result<(), slint::PlatformError> {
                             .collect();
                         let model = slint::VecModel::from(items);
                         app.set_news_items(slint::ModelRc::new(model));
-                        app.set_news_status(format!("Cached • updated {}m ago", age_minutes(c.ts)).into());
+                        app.set_news_status(
+                            format!("Cached • updated {}m ago", age_minutes(c.ts)).into(),
+                        );
                     }
                 }
             }
@@ -603,7 +670,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     Ok(rows) => {
                         let _ = save_news_for(&user_for_save, &rows); // <-- per-user save
                         ui(&aw, move |app| {
-                            let items: Vec<ArticleItem> = rows.into_iter()
+                            let items: Vec<ArticleItem> = rows
+                                .into_iter()
                                 .map(|(title, source, published, url, thumbnail)| ArticleItem {
                                     title: title.into(),
                                     source: source.into(),
@@ -643,12 +711,13 @@ fn main() -> Result<(), slint::PlatformError> {
             h2.spawn(async move {
                 let _ = tokio::task::spawn_blocking(move || {
                     let _ = open::that(url);
-                }).await;
+                })
+                .await;
             });
         });
     }
 
-// Handle save from settings
+    // Handle save from settings
 
     {
         let app_weak = app.as_weak();
@@ -660,13 +729,109 @@ fn main() -> Result<(), slint::PlatformError> {
                     news_topic: app.get_news_topic().to_string(),
                     units_celsius: app.get_use_celsius(),
                 };
-                let user = current_user(&state_for_save);          // <-- get active user
+                let user = current_user(&state_for_save); // <-- get active user
                 if let Err(e) = save_config_for(&user, &cfg) {
                     eprintln!("Save config error: {e:?}");
                 }
                 app.invoke_refresh_weather();
                 app.invoke_refresh_news();
             }
+        });
+    }
+
+    // HADOOP: EXPORT DATA
+    {
+        let app_weak = app.as_weak();
+        let state_for_export = state.clone();
+        let h = handle.clone();
+
+        app.on_export_hadoop_data(move || {
+            let user = current_user(&state_for_export);
+            let aw = app_weak.clone();
+
+            set_hadoop_status(&aw, "Exporting local data...".to_string());
+
+            h.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || export_all_user_data(&user)).await;
+
+                match result {
+                    Ok(Ok(paths)) => {
+                        let names: Vec<String> = paths
+                            .iter()
+                            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                            .collect();
+
+                        set_hadoop_status(&aw, format!("Exported locally: {}", names.join(", ")));
+                    }
+                    Ok(Err(err)) => {
+                        set_hadoop_status(&aw, format!("Export failed: {}", err));
+                    }
+                    Err(join_err) => {
+                        set_hadoop_status(&aw, format!("Export task failed: {:?}", join_err));
+                    }
+                }
+            });
+        });
+    }
+
+    // HADOOP: UPLOAD TO HDFS
+    {
+        let app_weak = app.as_weak();
+        let state_for_upload = state.clone();
+        let h = handle.clone();
+
+        app.on_upload_hadoop_data(move || {
+            let user = current_user(&state_for_upload);
+            let aw = app_weak.clone();
+
+            set_hadoop_status(&aw, "Uploading export files to HDFS...".to_string());
+
+            h.spawn(async move {
+                let result =
+                    tokio::task::spawn_blocking(move || upload_exports_to_hdfs(&user)).await;
+
+                match result {
+                    Ok(Ok(msg)) => {
+                        set_hadoop_status(&aw, msg);
+                    }
+                    Ok(Err(err)) => {
+                        set_hadoop_status(&aw, format!("Upload failed: {}", err));
+                    }
+                    Err(join_err) => {
+                        set_hadoop_status(&aw, format!("Upload task failed: {:?}", join_err));
+                    }
+                }
+            });
+        });
+    }
+
+    // HADOOP: LIST HDFS FILES
+    {
+        let app_weak = app.as_weak();
+        let state_for_list = state.clone();
+        let h = handle.clone();
+
+        app.on_list_hadoop_files(move || {
+            let user = current_user(&state_for_list);
+            let aw = app_weak.clone();
+
+            set_hadoop_status(&aw, "Listing HDFS files...".to_string());
+
+            h.spawn(async move {
+                let result = tokio::task::spawn_blocking(move || list_hdfs_user_files(&user)).await;
+
+                match result {
+                    Ok(Ok(listing)) => {
+                        set_hadoop_status(&aw, listing);
+                    }
+                    Ok(Err(err)) => {
+                        set_hadoop_status(&aw, format!("List failed: {}", err));
+                    }
+                    Err(join_err) => {
+                        set_hadoop_status(&aw, format!("List task failed: {:?}", join_err));
+                    }
+                }
+            });
         });
     }
     app.run()

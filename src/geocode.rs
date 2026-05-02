@@ -28,18 +28,30 @@ impl std::error::Error for GeocodeError {
     }
 }
 
-impl From<reqwest::Error> for GeocodeError { fn from(e: reqwest::Error) -> Self { Self::Http(e) } }
-impl From<serde_json::Error> for GeocodeError { fn from(e: serde_json::Error) -> Self { Self::Json(e) } }
+impl From<reqwest::Error> for GeocodeError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e)
+    }
+}
+impl From<serde_json::Error> for GeocodeError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
+}
 
 #[derive(Deserialize)]
-struct SearchResp { results: Option<Vec<ResultItem>> }
+struct SearchResp {
+    results: Option<Vec<ResultItem>>,
+}
 #[derive(Deserialize)]
 struct ResultItem {
     name: String,
     latitude: f64,
     longitude: f64,
-    #[serde(default)] country: String,
-    #[serde(default)] admin1: String,
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    admin1: String,
 }
 
 /// Return (lat, lon, display_label)
@@ -48,11 +60,22 @@ pub async fn fetch_coords(query: &str) -> Result<(f64, f64, String), GeocodeErro
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
         urlencoding::encode(query)
     );
-    let resp = reqwest::Client::new().get(&url).send().await?.error_for_status()?;
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?;
     let data: SearchResp = resp.json().await?;
-    let item = data.results.and_then(|mut v| v.pop()).ok_or(GeocodeError::NotFound)?;
-    let label = if item.country.is_empty() { item.name.clone() }
-    else if item.admin1.is_empty() { format!("{} ({})", item.name, item.country) }
-    else { format!("{} — {}, {}", item.name, item.admin1, item.country) };
+    let item = data
+        .results
+        .and_then(|mut v| v.pop())
+        .ok_or(GeocodeError::NotFound)?;
+    let label = if item.country.is_empty() {
+        item.name.clone()
+    } else if item.admin1.is_empty() {
+        format!("{} ({})", item.name, item.country)
+    } else {
+        format!("{} — {}, {}", item.name, item.admin1, item.country)
+    };
     Ok((item.latitude, item.longitude, label))
 }

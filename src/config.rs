@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
 
 fn base_dir() -> io::Result<PathBuf> {
-    let home = std::env::var("HOME")
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "HOME not set"))?;
+    let home =
+        std::env::var("HOME").map_err(|_| io::Error::new(io::ErrorKind::Other, "HOME not set"))?;
     let dir = PathBuf::from(home).join("tock-workshop").join("slint_rust");
     fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -14,7 +14,6 @@ pub fn users_base_dir() -> io::Result<PathBuf> {
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
-
 
 pub fn config_path() -> io::Result<PathBuf> {
     Ok(base_dir()?.join("config.json"))

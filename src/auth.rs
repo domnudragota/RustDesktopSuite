@@ -1,6 +1,6 @@
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -39,15 +39,22 @@ impl std::error::Error for AuthError {
     }
 }
 
-
-impl From<io::Error> for AuthError { fn from(e: io::Error) -> Self { AuthError::Io(e) } }
-impl From<serde_json::Error> for AuthError { fn from(e: serde_json::Error) -> Self { AuthError::Serde(e) } }
+impl From<io::Error> for AuthError {
+    fn from(e: io::Error) -> Self {
+        AuthError::Io(e)
+    }
+}
+impl From<serde_json::Error> for AuthError {
+    fn from(e: serde_json::Error) -> Self {
+        AuthError::Serde(e)
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 struct UserRecord {
     username: String,
-    pin_phc: String,        // Argon2 PHC string (includes salt + params)
-    created_at: String,     // ISO8601
+    pin_phc: String,    // Argon2 PHC string (includes salt + params)
+    created_at: String, // ISO8601
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -62,12 +69,15 @@ pub struct LocalAuth {
 impl LocalAuth {
     pub fn new() -> Result<Self, AuthError> {
         use std::env;
-        let home = env::var("HOME").map(PathBuf::from).map_err(|_| AuthError::NoConfigDir)?;
+        let home = env::var("HOME")
+            .map(PathBuf::from)
+            .map_err(|_| AuthError::NoConfigDir)?;
         let dir = home.join("tock-workshop").join("slint_rust");
         fs::create_dir_all(&dir)?;
-        Ok(Self { path: dir.join("users.json") })
+        Ok(Self {
+            path: dir.join("users.json"),
+        })
     }
-
 
     fn load(&self) -> Result<UsersFile, AuthError> {
         if !self.path.exists() {
@@ -111,7 +121,11 @@ impl LocalAuth {
 
     pub fn verify_login(&self, username: &str, pin: &str) -> Result<(), AuthError> {
         let uf = self.load()?;
-        let rec = uf.users.iter().find(|u| u.username == username).ok_or(AuthError::NotFound)?;
+        let rec = uf
+            .users
+            .iter()
+            .find(|u| u.username == username)
+            .ok_or(AuthError::NotFound)?;
         let parsed = PasswordHash::new(&rec.pin_phc).map_err(|_| AuthError::InvalidPin)?;
         Argon2::default()
             .verify_password(pin.as_bytes(), &parsed)
@@ -133,4 +147,3 @@ impl LocalAuth {
         self.save(&uf)
     }
 }
-
